@@ -2,5 +2,8 @@
   "name": "cni-bridge",
   "version": "1.0.0",
   "main": "index.js",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "ajv": "^6.6.2"
+  }
 }

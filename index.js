@@ -5,18 +5,8 @@
 const {spawn, spawnSync} = require('child_process');
 const fs = require('fs');
 const path = require('path');
-
-function cniParseArgs(args = '') {
-    return args
-        .split(';')
-        .reduce((acc, item) => {
-
-            let [key, value] = item.split('=');
-            acc[key] = value;
-            return acc;
-
-        }, {});
-}
+const Ajv = require('ajv');
+const ajv = new Ajv;
 
 async function getStdinData() {
 
@@ -86,39 +76,28 @@ async function cmdAdd(envData, stdinData) {
 
     if (stdinData.ipam.type) {
 
-        let cniPaths = envData.CNI_PATH.split(';');
         let pluginName = stdinData.ipam.type;
+        let envPath = process.env.PATH;
 
-        let plugin = cniPaths.reduce((acc, item) => {
-
-            let pluginPath = path.join(item, pluginName);
-
-            try {
-
-                console.log(pluginPath);
-                fs.accessSync(pluginPath, fs.constants.X_OK);
-                return pluginPath;
-
-            } catch (error) {}
-
-        }, '');
-
-        if (!plugin) throw new Error(`plugin ${pluginName} not found`);
+        process.env.PATH = `${envPath}:${envData.CNI_PATH}`;
 
         let ipamStdin = Object.assign({}, stdinData.ipam, {
             name: stdinData.name,
             cniVersion: stdinData.cniVersion,
         });
 
-        let result = spawnSync(plugin, [], {
+        let result = spawnSync(pluginName, [], {
             env: envData,
             input: JSON.stringify(ipamStdin),
         })
 
-        // result = JSON.parse(result.stdout.toString());
-        result = result.stdout.toString();
+        let resultJson = JSON.parse(result.stdout.toString());
+        resultJson.interfaces = [
+            { name: envData.CNI_IFNAME }
+        ];
+        resultJson.ips[0].interface = 0;
 
-        console.log(result);
+        console.log(JSON.stringify(resultJson));
 
     }
 
@@ -128,31 +107,17 @@ async function cmdDel(envData, stdinData) {
 
     if (stdinData.ipam.type) {
 
-        let cniPaths = envData.CNI_PATH.split(';');
         let pluginName = stdinData.ipam.type;
+        let envPath = process.env.PATH;
 
-        let plugin = cniPaths.reduce((acc, item) => {
-
-            let pluginPath = path.join(item, pluginName);
-
-            try {
-
-                console.log(pluginPath);
-                fs.accessSync(pluginPath, fs.constants.X_OK);
-                return pluginPath;
-
-            } catch (error) {}
-
-        }, '');
-
-        if (!plugin) return;
+        process.env.PATH = `${envPath}:${envData.CNI_PATH}`;
 
         let ipamStdin = Object.assign({}, stdinData.ipam, {
             name: stdinData.name,
             cniVersion: stdinData.cniVersion,
         });
 
-        let result = spawnSync(plugin, [], {
+        let result = spawnSync(pluginName, [], {
             env: envData,
             input: JSON.stringify(ipamStdin),
         })
@@ -189,7 +154,6 @@ async function cmdDel(envData, stdinData) {
     let ifName = envData.CNI_IFNAME;
     let path = envData.CNI_PATH;
     let cniArgs = envData.CNI_ARGS;
-    cniArgs = cniArgs ? cniParseArgs(envData.CNI_ARGS) : {};
 
     let stdinData = JSON.parse(await getStdinData());
     stdinData = Object.assign({}, defaults, stdinData);
