@@ -1,25 +1,25 @@
 #!/usr/bin/env node
 
-'use strict';
+"use strict";
 
-const {spawn, spawnSync} = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const Ajv = require('ajv');
+const {spawn, spawnSync} = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const Ajv = require("ajv");
 const ajv = new Ajv;
 
 async function getStdinData() {
 
     return new Promise((res, rej) => {
 
-        let returnData = '';
+        let returnData = "";
 
         let dataHandler = data => { returnData += data; };
 
-        process.stdin.on('data', dataHandler);
+        process.stdin.on("data", dataHandler);
 
-        process.stdin.on('end', _ => {
-            process.stdin.removeListener('data', dataHandler);
+        process.stdin.on("end", _ => {
+            process.stdin.removeListener("data", dataHandler);
             res(returnData);
         });
 
@@ -29,7 +29,7 @@ async function getStdinData() {
 
 function ifConfig(ifName, args = []) {
 
-    let result = spawnSync('ifconfig', [ifName, ...args]);
+    let result = spawnSync("ifconfig", [ifName, ...args]);
     return result.stdout
         .toString()
         .trim()
@@ -38,7 +38,7 @@ function ifConfig(ifName, args = []) {
 
 function ifCreate(ifName, args = []) {
 
-    return ifConfig(ifName, ['create', ...args])
+    return ifConfig(ifName, ["create", ...args])
         .toString()
         .trim()
 
@@ -46,11 +46,21 @@ function ifCreate(ifName, args = []) {
 
 function getIfaces() {
 
-    let result = spawnSync('ifconfig', ['-l']);
+    let result = spawnSync("ifconfig", ["-l"]);
     return result.stdout
         .toString()
         .trim()
-        .split(' ');
+        .split(" ");
+
+}
+
+function getInterfaceInfo(iface) {
+
+    let result = spawnSync(
+        "netstat", ["-I", iface, "-n", "-f", "link", "--libxo", "json"]
+    );
+    let json = JSON.parse(result.stdout.toString());
+    return json.statistics.interface;
 
 }
 
@@ -60,19 +70,45 @@ async function cmdAdd(envData, stdinData) {
 
     if (!getIfaces().includes(bridgeName)) {
 
-        let bridge = ifCreate('bridge', ['up']);
-        ifConfig(bridge, ['name', bridgeName]);
+        let bridge = ifCreate("bridge", ["up"]);
+        ifConfig(bridge, ["name", bridgeName]);
 
     }
+    let bridgeInfo = getInterfaceInfo(bridgeName);
 
-    let epairA = ifCreate('epair', ['up']);
+    let epairA = ifCreate("epair", ["up"]);
+    let epairAInfo = getInterfaceInfo(epairA);
     let [_, num] = epairA.match(/^epair(\d+)a$/);
     let epairB = `epair${num}b`;
 
-    ifConfig(bridgeName, ['addm', epairA]);
+    ifConfig(bridgeName, ["addm", epairA]);
 
-    epairB = ifConfig(epairB, ['name', envData.CNI_IFNAME]);
-    ifConfig(epairB, ['vnet', envData.CNI_CONTAINERID]);
+    epairB = ifConfig(epairB, ["name", envData.CNI_IFNAME]);
+    ifConfig(epairB, ["vnet", envData.CNI_CONTAINERID]);
+
+    let result = {
+        cniVersion: "0.3.1",
+        interfaces: [],
+        ips: [],
+        routes: [],
+        dns: {},
+    };
+
+    result.interfaces.push({
+        name: bridgeName,
+    });
+
+    result.interfaces.push({
+        name: epairA,
+        mac: epairAInfo[0].address,
+    });
+
+    let interfacesLength = result.interfaces.push({
+        name: envData.CNI_IFNAME,
+        sandbox: envData.CNI_CONTAINERID,
+    });
+
+    let ifIndex = interfacesLength - 1;
 
     if (stdinData.ipam.type) {
 
@@ -86,20 +122,32 @@ async function cmdAdd(envData, stdinData) {
             cniVersion: stdinData.cniVersion,
         });
 
-        let result = spawnSync(pluginName, [], {
+        let templateResult = {
+            ips: [],
+            routes: [],
+            dns: {},
+        };
+
+        let ipamResult = spawnSync(pluginName, [], {
             env: envData,
             input: JSON.stringify(ipamStdin),
-        })
+        });
 
-        let resultJson = JSON.parse(result.stdout.toString());
-        resultJson.interfaces = [
-            { name: envData.CNI_IFNAME }
-        ];
-        resultJson.ips[0].interface = 0;
+        let ipamResultJson = JSON.parse(ipamResult.stdout.toString());
+        ipamResultJson = Object.assign({}, templateResult, ipamResultJson);
 
-        console.log(JSON.stringify(resultJson));
+        ipamResultJson.ips = ipamResultJson.ips.map(ip => {
+            ip.interface = ifIndex;
+            return ip;
+        });
+
+        result.ips = [...result.ips, ...ipamResultJson.ips];
+        result.routes = [...result.routes, ...ipamResultJson.routes];
+        result.dns = Object.assign({}, result.dns, ipamResultJson.dns);
 
     }
+
+    console.log(JSON.stringify(result));
 
 }
 
@@ -122,8 +170,8 @@ async function cmdDel(envData, stdinData) {
             input: JSON.stringify(ipamStdin),
         })
 
-        ifConfig(envData.CNI_IFNAME, ['-vnet', envData.CNI_CONTAINERID]);
-        ifConfig(envData.CNI_IFNAME, ['destroy'])
+        ifConfig(envData.CNI_IFNAME, ["-vnet", envData.CNI_CONTAINERID]);
+        ifConfig(envData.CNI_IFNAME, ["destroy"])
 
     }
 
@@ -133,14 +181,12 @@ async function cmdDel(envData, stdinData) {
 (async _ => {
 
     let defaults = {
-        cniVersion: '0.3.1',
-        name: '',
-        type: 'bridge',
-        bridge: 'cni0', // bridge interface name
+        cniVersion: "0.3.1",
+        name: "",
+        type: "bridge",
+        bridge: "cni0", // bridge interface name
         ipam: {},
         args: {},
-        ipMasq: false,
-        promiscMode: false,
         mtu: null,
         isDefaultGateway: false,
         isGateway: false,
@@ -159,10 +205,10 @@ async function cmdDel(envData, stdinData) {
     stdinData = Object.assign({}, defaults, stdinData);
 
     switch (command) {
-        case 'ADD':
+        case "ADD":
             await cmdAdd(envData, stdinData);
             break;
-        case 'DEL':
+        case "DEL":
             await cmdDel(envData, stdinData);
             break;
     }
